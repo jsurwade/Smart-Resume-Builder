@@ -19,10 +19,6 @@ spec:
         }
     }
 
-    environment {
-        SONAR_TOKEN = credentials('sonar-token') // Jenkins credential
-    }
-
     stages {
         stage('Checkout') {
             steps {
@@ -33,7 +29,9 @@ spec:
         stage('Install Dependencies') {
             steps {
                 container('node') {
-                    sh 'npm install'
+                    sh '''
+                    npm install
+                    '''
                 }
             }
         }
@@ -41,21 +39,8 @@ spec:
         stage('Build Frontend') {
             steps {
                 container('node') {
-                    sh 'npm run build'
-                }
-            }
-        }
-
-        stage('SonarQube Scan') {
-            steps {
-                container('node') {
                     sh '''
-                    # Run SonarQube scan
-                    sonar-scanner \
-                        -Dsonar.projectKey=SmartResumeBuilder \
-                        -Dsonar.sources=. \
-                        -Dsonar.host.url=http://your-sonarqube-server \
-                        -Dsonar.login=$SONAR_TOKEN
+                    npm run build
                     '''
                 }
             }
@@ -64,7 +49,9 @@ spec:
         stage('Build Docker Image') {
             steps {
                 container('dind') {
-                    sh 'docker build -t resumebuilder .'
+                    sh '''
+                    docker build -t resumebuilder .
+                    '''
                 }
             }
         }
