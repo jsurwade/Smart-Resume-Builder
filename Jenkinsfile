@@ -7,7 +7,7 @@ kind: Pod
 spec:
   containers:
   - name: node
-    image: node:18-alpine
+    image: node:20-alpine
     command:
     - cat
     tty: true
