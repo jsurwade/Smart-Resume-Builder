@@ -1,27 +1,24 @@
-# Stage 1: Build the React application
+# Stage 1: Build the app
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-
 COPY package*.json ./
-
-RUN npm install
-
+RUN npm install --production=false
 COPY . .
-
 RUN npm run build
 
-# Stage 2: Serve the application with a simple web server
-FROM alpine:latest
+# Stage 2: Serve production build
+FROM alpine:3.18
 
 WORKDIR /app
 
-# Install 'serve' globally
-RUN npm install -g serve
+# Install minimal dependencies
+RUN apk add --no-cache nodejs current npm
 
-# Copy the build output from the builder stage
+# Copy build output from builder stage
 COPY --from=builder /app/dist ./dist
+COPY package*.json ./
+RUN npm install --production
 
 EXPOSE 3000
-
-CMD ["serve", "-s", "dist", "-l", "3000"]
+CMD ["npm", "start"]
