@@ -1,95 +1,77 @@
 pipeline {
-    agent {
-        kubernetes {
-            yaml '''
-apiVersion: v1
-kind: Pod
-spec:
-  containers:
-  - name: node
-    image: node:20-alpine
-    command: ["cat"]
-    tty: true
-  - name: dind
-    image: docker:dind
-    securityContext:
-      privileged: true
-  imagePullSecrets:
-  - name: dockerhub-secret
-'''
-        }
-    }
+    agent any
 
     environment {
-        SONAR_TOKEN = credentials('sonar-token')       // SonarQube token stored in Jenkins
-        DOCKER_IMAGE = "resumebuilder"
+        SONAR_HOST_URL = 'http://localhost:9000'
+        DOCKER_IMAGE = "jsurwade/smart-resume-builder"
+    }
+
+    tools {
+        nodejs "node16"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                checkout scm
+                git 'https://github.com/jsurwade/Smart-Resume-Builder.git'
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                container('node') {
-                    sh 'npm install'
-                }
-            }
-        }
-
-        stage('Build Frontend') {
-            steps {
-                container('node') {
-                    sh 'npm run build'
-                }
+                sh 'npm install'
             }
         }
 
         stage('SonarQube Scan') {
             steps {
-                container('node') {
-                    sh '''
-                    # Run SonarQube scan
-                    sonar-scanner \
-                        -Dsonar.projectKey=SmartResumeBuilder \
+                withSonarQubeEnv('SonarQube') {
+                    withCredentials([string(credentialsId: 'sonarqube_token', variable: 'SONAR_TOKEN')]) {
+                        sh """
+                        npx sonar-scanner \
+                        -Dsonar.projectKey=Smart-Resume-Builder \
                         -Dsonar.sources=. \
-                        -Dsonar.host.url=http://your-sonarqube-server \
+                        -Dsonar.host.url=$SONAR_HOST_URL \
                         -Dsonar.login=$SONAR_TOKEN
-                    '''
+                        """
+                    }
                 }
             }
         }
 
-        stage('Docker Login') {
+        stage('Docker Build & Push') {
             steps {
-                container('dind') {
-                    sh '''
-                    # Login to Docker Hub using pre-configured Jenkins secret
-                    docker login -u <YOUR_DOCKER_USERNAME> -p <YOUR_DOCKER_TOKEN>
-                    
-                    # Optional: Pre-pull images to avoid rate limits
-                    docker pull node:20-alpine
-                    docker pull alpine:3.18
-                    '''
+                withCredentials([usernamePassword(credentialsId: 'dockerhub_credentials', usernameVariable: 'USER', passwordVariable: 'PASS')]) {
+                    sh """
+                    docker build -t $DOCKER_IMAGE:latest .
+                    echo $PASS | docker login -u $USER --password-stdin
+                    docker push $DOCKER_IMAGE:latest
+                    """
                 }
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Deploy on Server') {
             steps {
-                container('dind') {
-                    sh "docker build -t $DOCKER_IMAGE ."
+                withCredentials([usernamePassword(credentialsId: 'server_ssh', usernameVariable: 'SERVER_USER', passwordVariable: 'SERVER_PASS')]) {
+                    sh """
+                    sshpass -p "$SERVER_PASS" ssh -o StrictHostKeyChecking=no $SERVER_USER@YOUR_SERVER_IP \
+                    "docker pull $DOCKER_IMAGE:latest &&
+                     docker stop resume || true &&
+                     docker rm resume || true &&
+                     docker run -d --name resume -p 3000:3000 $DOCKER_IMAGE:latest"
+                    """
                 }
             }
         }
+    }
 
-        stage('Build Complete') {
-            steps {
-                echo "Build Finished Successfully!"
-            }
+    post {
+        success {
+            echo "🚀 Build Complete & Successfully Deployed!"
+        }
+        failure {
+            echo "❌ Build Failed — Check Logs"
         }
     }
 }
