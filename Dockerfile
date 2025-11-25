@@ -3,22 +3,18 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --production=false
+RUN npm install
 COPY . .
 RUN npm run build
 
-# Stage 2: Serve production build
-FROM alpine:3.18
+# Stage 2: Serve production build using NGINX
+FROM nginx:stable-alpine
 
-WORKDIR /app
+# Copy build output to NGINX public folder
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Install minimal dependencies
-RUN apk add --no-cache nodejs current npm
+# Expose port
+EXPOSE 80
 
-# Copy build output from builder stage
-COPY --from=builder /app/dist ./dist
-COPY package*.json ./
-RUN npm install --production
-
-EXPOSE 3000
-CMD ["npm", "start"]
+# Start NGINX
+CMD ["nginx", "-g", "daemon off;"]
