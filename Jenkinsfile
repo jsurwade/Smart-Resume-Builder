@@ -6,11 +6,6 @@ pipeline {
 apiVersion: v1
 kind: Pod
 spec:
-  hostAliases:
-  - ip: "192.168.20.250"
-    hostnames:
-      - "sonarqube.imcc.com"
-
   containers:
 
   - name: node
@@ -45,11 +40,12 @@ spec:
     }
 
     environment {
-        SONARQUBE_ENV        = "sonarqube-2401115"
-        SONARQUBE_AUTH_TOKEN = credentials('sonartoken')
+        SONARQUBE_ENV = "sonarqube-2401106"
+        SONAR_AUTH = credentials('sonar-token-2401106')
 
-        NEXUS_URL    = "nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085"
-        DOCKER_IMAGE = "${NEXUS_URL}/my-repository/resume-builder-app"
+        NEXUS_URL = "nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085"
+        BACKEND_IMAGE = "${NEXUS_URL}/my-repository/smart-resume-backend"
+        FRONTEND_IMAGE = "${NEXUS_URL}/my-repository/smart-resume-frontend"
     }
 
     stages {
@@ -57,23 +53,31 @@ spec:
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/aniketlangote03/resumebuildervite.git',
+                    url: 'https://github.com/jsurwade/Smart-Resume-Builder.git',
                     credentialsId: 'git-token-creds'
             }
         }
 
-        stage('Install Dependencies') {
+        stage('Install Backend Dependencies') {
             steps {
                 container('node') {
-                    sh "npm install"
+                    sh "cd Backend && npm install"
                 }
             }
         }
 
-        stage('Build React App') {
+        stage('Install Frontend Dependencies') {
             steps {
                 container('node') {
-                    sh "npm run build"
+                    sh "cd Frontend && npm install"
+                }
+            }
+        }
+
+        stage('Build Frontend App') {
+            steps {
+                container('node') {
+                    sh "cd Frontend && npm run build"
                 }
             }
         }
@@ -84,67 +88,51 @@ spec:
                     withSonarQubeEnv("${SONARQUBE_ENV}") {
                         sh """
                             sonar-scanner \
-                              -Dsonar.projectKey=Resumebuilder_Aniket_2401115 \
-                              -Dsonar.sources=src \
+                              -Dsonar.projectKey=Smart_Resume_Builder_2401106 \
+                              -Dsonar.sources=. \
                               -Dsonar.host.url=http://sonarqube.imcc.com \
-                              -Dsonar.token=${SONARQUBE_AUTH_TOKEN}
+                              -Dsonar.token=${SONAR_AUTH}
                         """
                     }
                 }
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build Docker Images') {
             steps {
                 container('docker') {
+                    sh '''
+                        echo "Waiting for Docker daemon..."
+                        for i in {1..30}; do
+                            if docker info >/dev/null 2>&1; then echo "Docker Ready"; break; fi
+                            sleep 2
+                        done
 
-                    // Login to Docker Hub (to avoid 429 pull rate limits)
-                    withCredentials([usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DUSER',
-                        passwordVariable: 'DPASS'
-                    )]) {
+                        docker build -t backend-temp ./Backend
+                        docker build -t frontend-temp ./Frontend
+                    '''
+                }
+            }
+        }
 
+        stage('Push Images to Nexus') {
+            steps {
+                container('docker') {
+                    withCredentials([usernamePassword(credentialsId: 'nexus-creds', usernameVariable: 'NUSER', passwordVariable: 'NPASS')]) {
                         sh '''
-                            echo "Waiting for Docker daemon..."
-                            for i in {1..30}; do
-                                if docker info >/dev/null 2>&1; then
-                                    echo "Docker is ready!"
-                                    break
-                                fi
-                                sleep 2
-                            done
-                        '''
-
-                        script {
-                            def tag = env.BUILD_NUMBER
-
-                            sh """
-                                echo "$DPASS" | docker login -u "$DUSER" --password-stdin
-
-                                docker build -t ${DOCKER_IMAGE}:${tag} .
-                                docker tag ${DOCKER_IMAGE}:${tag} ${DOCKER_IMAGE}:latest
-                            """
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('Push Docker Image to Nexus') {
-            steps {
-                container('docker') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'nexus-creds-resumebuilder',
-                        usernameVariable: 'NUSER',
-                        passwordVariable: 'NPASS'
-                    )]) {
-
-                        sh """
+                            TAG=${BUILD_NUMBER}
                             echo "$NPASS" | docker login ${NEXUS_URL} -u "$NUSER" --password-stdin
-                            docker push ${DOCKER_IMAGE}:${BUILD_NUMBER}
-                            docker push ${DOCKER_IMAGE}:latest
-                        """
+
+                            docker tag backend-temp ${BACKEND_IMAGE}:${TAG}
+                            docker tag backend-temp ${BACKEND_IMAGE}:latest
+                            docker tag frontend-temp ${FRONTEND_IMAGE}:${TAG}
+                            docker tag frontend-temp ${FRONTEND_IMAGE}:latest
+
+                            docker push ${BACKEND_IMAGE}:${TAG}
+                            docker push ${BACKEND_IMAGE}:latest
+                            docker push ${FRONTEND_IMAGE}:${TAG}
+                            docker push ${FRONTEND_IMAGE}:latest
+                        '''
                     }
                 }
             }
@@ -152,7 +140,7 @@ spec:
     }
 
     post {
-        success { echo "🚀 Build & Push Successful!" }
-        failure { echo "❌ Pipeline failed — check logs." }
+        success { echo "🚀 CI Completed Successfully! Both images pushed to Nexus." }
+        failure { echo "❌ Pipeline Failed. Check logs." }
     }
 }
