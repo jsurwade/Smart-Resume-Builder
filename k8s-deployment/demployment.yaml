@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "smart-resume-builder"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: "smart-resume-builder"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      imagePullSecrets:
+      - name: nexus-secret
+      containers:
+      - name: backend
+        image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-backend:latest
+        ports:
+        - containerPort: 5000
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        env:
+        - name: PORT
+          value: "5000"
+        - name: BASE_URL
+          value: "http://backend-service.smart-resume-builder.svc.cluster.local:5000"
+        - name: MONGO_URI
+          valueFrom:
+            secretKeyRef:
+              name: backend-secret
+              key: MONGO_URI
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: backend-secret
+              key: JWT_SECRET
+        - name: GMAIL_USER
+          valueFrom:
+            secretKeyRef:
+              name: backend-secret
+              key: GMAIL_USER
+        - name: GMAIL_PASS
+          valueFrom:
+            secretKeyRef:
+              name: backend-secret
+              key: GMAIL_PASS
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: "smart-resume-builder"
+spec:
+  selector:
+    app: backend
+  ports:
+    - protocol: TCP
+      port: 5000
+      targetPort: 5000
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: "smart-resume-builder"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      imagePullSecrets:
+      - name: nexus-secret
+      containers:
+      - name: frontend
+        image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-frontend:latest
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: "smart-resume-builder"
+spec:
+  selector:
+    app: frontend
+  ports:
+    - protocol: TCP
+      port: 32000
+      targetPort: 80
+  type: NodePort
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: "smart-resume-builder"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: smartresumebuilder.imcc.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: frontend-service
+            port:
+              number: 32000
