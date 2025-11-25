@@ -1,5 +1,5 @@
 pipeline {
-agent {
+    agent {
         kubernetes {
             yaml '''
 apiVersion: v1
@@ -41,6 +41,14 @@ spec:
     - name: workspace-volume
       mountPath: /home/jenkins/agent
 
+  - name: node
+    image: node:20-alpine
+    command: ["cat"]
+    tty: true
+    volumeMounts:
+    - mountPath: /home/jenkins/agent
+      name: workspace-volume
+
   - name: jnlp
     image: jenkins/inbound-agent:3309.v27b_9314fd1a_4-1
     env:
@@ -63,21 +71,51 @@ spec:
         }
     }
 
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-cred')
+        IMAGE_BACKEND = "jsurwade/smart-resume-backend"
+        IMAGE_FRONTEND = "jsurwade/smart-resume-frontend"
+        BUILD_NUMBER = "${env.BUILD_NUMBER}"
+        NAMESPACE = "smart-resume-builder"
+    }
+
     stages {
 
-        stage('CHECK') {
+        stage('Checkout') {
             steps {
-                echo "DEBUG >>> NEW JENKINSFILE IS ACTIVE"
+                checkout scm
             }
         }
 
-        stage('Build Docker Images') {
+        stage('Backend Build & Docker Image') {
             steps {
+                container('node') {
+                    sh '''
+                        cd backend
+                        npm install
+                        npm run build
+                    '''
+                }
                 container('dind') {
                     sh '''
-                        sleep 15
-                        docker build -t server:latest ./server
-                        docker build -t client:latest ./client
+                        docker build -t $IMAGE_BACKEND:latest ./backend
+                    '''
+                }
+            }
+        }
+
+        stage('Frontend Build & Docker Image') {
+            steps {
+                container('node') {
+                    sh '''
+                        cd frontend
+                        npm install
+                        npm run build
+                    '''
+                }
+                container('dind') {
+                    sh '''
+                        docker build -t $IMAGE_FRONTEND:latest ./frontend
                     '''
                 }
             }
@@ -89,7 +127,7 @@ spec:
                     withCredentials([string(credentialsId: 'sonar-token-2401106', variable: 'SONAR_TOKEN')]) {
                         sh '''
                             sonar-scanner \
-                              -Dsonar.projectKey=2401106_client-server-app \
+                              -Dsonar.projectKey=2401106_smart_resume \
                               -Dsonar.host.url=http://my-sonarqube-sonarqube.sonarqube.svc.cluster.local:9000 \
                               -Dsonar.login=$SONAR_TOKEN
                         '''
@@ -102,29 +140,27 @@ spec:
             steps {
                 container('dind') {
                     sh '''
-                        docker --version
-                        sleep 10
-                        docker login nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085 -u admin -p Changeme@2025
+                        echo "$DOCKERHUB_CREDENTIALS_PSW" | docker login -u "$DOCKERHUB_CREDENTIALS_USR" --password-stdin
                     '''
                 }
             }
         }
 
-        stage('Tag + Push Images') {
+        stage('Push Images') {
             steps {
                 container('dind') {
                     sh '''
-                        docker tag server:latest nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/server:latest
-                        docker tag client:latest nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/client:latest
+                        docker tag $IMAGE_BACKEND:latest $IMAGE_BACKEND:$BUILD_NUMBER
+                        docker tag $IMAGE_FRONTEND:latest $IMAGE_FRONTEND:$BUILD_NUMBER
 
-                        docker push nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/server:latest
-                        docker push nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/client:latest
+                        docker push $IMAGE_BACKEND:$BUILD_NUMBER
+                        docker push $IMAGE_FRONTEND:$BUILD_NUMBER
                     '''
                 }
             }
         }
 
-        stage('Create Namespace + Secrets') {
+        stage('Create Namespace & Secrets') {
             steps {
                 container('kubectl') {
                     withCredentials([
@@ -134,18 +170,15 @@ spec:
                         string(credentialsId: 'gmail-pass-2401106', variable: 'GMAIL_PASS')
                     ]) {
                         sh '''
-                            # Create namespace directly (no YAML file)
-                            kubectl get namespace 2401106 || kubectl create namespace 2401106
+                            kubectl get namespace $NAMESPACE || kubectl create namespace $NAMESPACE
 
-                            # Docker registry pull secret
                             kubectl create secret docker-registry nexus-secret \
-                              --docker-server=nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085 \
-                              --docker-username=admin \
-                              --docker-password=Changeme@2025 \
-                              --namespace=2401106 || true
+                              --docker-server=docker.io \
+                              --docker-username=$DOCKERHUB_CREDENTIALS_USR \
+                              --docker-password=$DOCKERHUB_CREDENTIALS_PSW \
+                              --namespace $NAMESPACE || true
 
-                            # Application secrets
-                            kubectl create secret generic server-secret -n 2401106 \
+                            kubectl create secret generic smart-resume-secrets -n $NAMESPACE \
                               --from-literal=MONGO_URI="$MONGO_URI" \
                               --from-literal=JWT_SECRET="$JWT_SECRET" \
                               --from-literal=GMAIL_USER="$GMAIL_USER" \
@@ -156,27 +189,25 @@ spec:
             }
         }
 
-stage('Deploy to Kubernetes') {
+        stage('Deploy to Kubernetes') {
             steps {
                 container('kubectl') {
-                    // Ensure this directory exists in your repo!
-                    // If your yaml is in the root, remove the dir() block.
-                    dir('k8s-deployment') { 
-                        sh """
-                            # 1. Update Image Tag to match the Build
-                            sed -i 's|server:latest|server:${BUILD_NUMBER}|g' deployment.yaml
-                            sed -i 's|client:latest|client:${BUILD_NUMBER}|g' deployment.yaml
-                            
-                            # 2. Deploy (Fire and Forget, like the successful log)
-                            kubectl apply -f deployment.yaml
-                            
-                            # 3. Optional: Print status but don't fail the pipeline yet
-                            kubectl get pods -n 2401106
-                        """
+                    dir('k8s-deployment') {
+                        sh '''
+                            sed -i "s|image:.*smart-resume-backend:.*|image: $IMAGE_BACKEND:$BUILD_NUMBER|g" deployment.yaml
+                            sed -i "s|image:.*smart-resume-frontend:.*|image: $IMAGE_FRONTEND:$BUILD_NUMBER|g" deployment.yaml
+
+                            kubectl apply -f deployment.yaml -n $NAMESPACE
+                            kubectl get pods -n $NAMESPACE
+                        '''
                     }
                 }
             }
         }
+    }
 
+    post {
+        success { echo "🎉 CI/CD Pipeline Completed Successfully!" }
+        failure { echo "❌ CI/CD Pipeline Failed!" }
     }
 }
