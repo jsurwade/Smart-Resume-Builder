@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: "smart-resume-builder"
+  name: "2401194"
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  namespace: "smart-resume-builder"
+  namespace: "2401194"
 spec:
   replicas: 1
   selector:
@@ -67,7 +67,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: backend-service
-  namespace: "smart-resume-builder"
+  namespace: "2401194"
 spec:
   selector:
     app: backend
@@ -81,7 +81,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: "smart-resume-builder"
+  namespace: "2401194"
 spec:
   replicas: 1
   selector:
@@ -104,7 +104,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend-service
-  namespace: "smart-resume-builder"
+  namespace: "2401194"
 spec:
   selector:
     app: frontend
@@ -118,11 +118,11 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: app-ingress
-  namespace: "smart-resume-builder"
+  namespace: "2401194"
 spec:
   ingressClassName: nginx
   rules:
-  - host: smartresumebuilder.imcc.com
+  - host: 2401194.imcc.com
     http:
       paths:
       - path: /
