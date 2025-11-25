@@ -8,8 +8,9 @@ import ATSChecker from './ATSChecker'
 import AnalyticsDashboard from './AnalyticsDashboard'
 import CoverLetterBuilder from './CoverLetterBuilder'
 import { save as lsSave, load as lsLoad } from '../utils/localStorage'
+import { saveResume, fetchResume } from '../api'
 
-export default function Builder({ initialData, selectedTemplate, onBack }) {
+export default function Builder({ initialData, selectedTemplate, onBack, userId }) {
   const [resumeData, setResumeData] = useState(initialData || getDefaultResumeData())
   const [colors, setColors] = useState({
     accent: '#2563eb',
@@ -22,7 +23,16 @@ export default function Builder({ initialData, selectedTemplate, onBack }) {
   const [showSaveLoad, setShowSaveLoad] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
   const [showCover, setShowCover] = useState(false)
-  const [activeTab, setActiveTab] = useState('personal')
+  const [activeTab, setActiveTab] = useState(
+    (() => {
+      try {
+        const t = localStorage.getItem('activeTab')
+        return t || 'personal'
+      } catch {
+        return 'personal'
+      }
+    })()
+  )
   const [recentSaves, setRecentSaves] = useState([])
 
   useEffect(() => {
@@ -30,16 +40,57 @@ export default function Builder({ initialData, selectedTemplate, onBack }) {
       localStorage.setItem('currentResumeData', JSON.stringify(resumeData))
       localStorage.setItem('resumeColors', JSON.stringify(colors))
       localStorage.setItem('resumeFont', font)
-      setAutoSaveStatus('saved')
+      const persist = async () => {
+        try {
+          if (userId) {
+            await saveResume(userId, resumeData)
+          }
+          setAutoSaveStatus('saved')
+        } catch (_) {
+          setAutoSaveStatus('saved')
+        }
+      }
+      persist()
     }, 3000)
 
     return () => clearTimeout(timer)
-  }, [resumeData, colors, font])
+  }, [resumeData, colors, font, userId])
 
   useEffect(() => {
     const idx = lsLoad('saved_index', []) || []
     setRecentSaves(idx.slice(0, 3))
   }, [showSaveLoad])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('activeTab', activeTab)
+    } catch {}
+  }, [activeTab])
+
+  // Ensure page restore returns to Builder when user is editing
+  useEffect(() => {
+    try {
+      localStorage.setItem('currentPage', 'builder')
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    const handler = () => {
+      try {
+        localStorage.setItem('currentResumeData', JSON.stringify(resumeData))
+        localStorage.setItem('resumeColors', JSON.stringify(colors))
+        localStorage.setItem('resumeFont', font)
+        try { localStorage.setItem('currentPage', 'builder') } catch {}
+        if (userId && typeof fetch === 'function') {
+          const body = JSON.stringify({ data: resumeData })
+          const url = `${(typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_URL) || '/api'}/resume/${encodeURIComponent(userId)}`
+          fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
+        }
+      } catch {}
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [resumeData, colors, font, userId])
 
   function getDefaultResumeData() {
     return {
@@ -145,6 +196,17 @@ export default function Builder({ initialData, selectedTemplate, onBack }) {
               {autoSaveStatus === 'saved' && '✓ Saved'}
               {autoSaveStatus === 'saving' && '⟳ Saving...'}
             </span>
+            {userId && (
+              <div className="hidden md:flex items-center gap-2 text-xs text-gray-600 border rounded px-2 py-1">
+                <span className="truncate max-w-[140px]">{userId}</span>
+                <button
+                  onClick={() => navigator.clipboard.writeText(userId)}
+                  className="underline"
+                >
+                  Copy ID
+                </button>
+              </div>
+            )}
             <button
               onClick={() => {
                 const id = `${Date.now()}`
@@ -158,6 +220,35 @@ export default function Builder({ initialData, selectedTemplate, onBack }) {
               className="px-4 py-2 border border-gray-300 rounded-lg font-semibold hover:bg-gray-50"
             >
               Save Current
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  setAutoSaveStatus('saving')
+                  if (userId) {
+                    await saveResume(userId, resumeData)
+                  }
+                  setAutoSaveStatus('saved')
+                } catch {}
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg font-semibold hover:bg-gray-50"
+            >
+              Save to Cloud
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  if (userId) {
+                    const res = await fetchResume(userId)
+                    if (res && res.data) {
+                      setResumeData(res.data)
+                    }
+                  }
+                } catch {}
+              }}
+              className="px-4 py-2 border border-gray-300 rounded-lg font-semibold hover:bg-gray-50"
+            >
+              Load from Cloud
             </button>
             <button
               onClick={() => setShowAnalytics(true)}

@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: resume-backend
+    env: node
+    plan: free
+    autoDeploy: true
+    buildCommand: npm ci
+    startCommand: node server/index.js
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: DB_NAME
+        value: resume_builder
+      - key: PORT
+        value: 4000
+      - key: NODE_VERSION
+        value: 18
