@@ -1,100 +1,182 @@
 pipeline {
-    agent {
+agent {
         kubernetes {
-            yaml """
+            yaml '''
 apiVersion: v1
 kind: Pod
 spec:
   containers:
-  - name: node
-    image: node:20-alpine
-    command:
-    - cat
+  - name: sonar-scanner
+    image: sonarsource/sonar-scanner-cli
+    command: ["cat"]
     tty: true
+
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command: ["cat"]
+    tty: true
+    securityContext:
+      runAsUser: 0
+    env:
+    - name: KUBECONFIG
+      value: /kube/config
+    volumeMounts:
+    - name: kubeconfig-secret
+      mountPath: /kube/config
+      subPath: kubeconfig
+
   - name: dind
     image: docker:dind
     securityContext:
       privileged: true
-"""
-        }
-    }
+    env:
+    - name: DOCKER_TLS_CERTDIR
+      value: ""
+    args: 
+    - "--storage-driver=overlay2"
+    volumeMounts:
+    - name: docker-config
+      mountPath: /etc/docker/daemon.json
+      subPath: daemon.json
+    - name: workspace-volume
+      mountPath: /home/jenkins/agent
 
-    environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-cred')   // DockerHub credentials ID
-        IMAGE_NAME = "jsurwade/smart-resume-builder"
-        SERVER_SSH = credentials('windows-server-ssh')          // SSH credential ID
-        SERVER_IP = "YOUR_WINDOWS_SERVER_IP"                   // replace with server IP
-        SERVER_USER = "YOUR_WINDOWS_USER"                      // replace with server username
-        CONTAINER_NAME = "smart-resume-builder"
+  - name: jnlp
+    image: jenkins/inbound-agent:3309.v27b_9314fd1a_4-1
+    env:
+    - name: JENKINS_AGENT_WORKDIR
+      value: "/home/jenkins/agent"
+    volumeMounts:
+    - mountPath: "/home/jenkins/agent"
+      name: workspace-volume
+
+  volumes:
+  - name: workspace-volume
+    emptyDir: {}
+  - name: docker-config
+    configMap:
+      name: docker-daemon-config
+  - name: kubeconfig-secret
+    secret:
+      secretName: kubeconfig-secret
+'''
+        }
     }
 
     stages {
-        stage('Checkout') {
-            steps { checkout scm }
-        }
 
-        stage('Backend Build') {
+        stage('CHECK') {
             steps {
-                container('node') {
-                    sh '''
-                    cd backend
-                    npm install
-                    npm run build
-                    '''
-                }
+                echo "DEBUG >>> NEW JENKINSFILE IS ACTIVE"
             }
         }
 
-        stage('Frontend Build') {
-            steps {
-                container('node') {
-                    sh '''
-                    cd frontend
-                    npm install
-                    npm run build
-                    '''
-                }
-            }
-        }
-
-        stage('Build Docker Image') {
+        stage('Build Docker Images') {
             steps {
                 container('dind') {
                     sh '''
-                    docker build -t $IMAGE_NAME:latest .
+                        sleep 15
+                        docker build -t server:latest ./server
+                        docker build -t client:latest ./client
                     '''
                 }
             }
         }
 
-        stage('Push Docker Image') {
+        stage('SonarQube Scan') {
+            steps {
+                container('sonar-scanner') {
+                    withCredentials([string(credentialsId: 'sonar-token-2401106', variable: 'SONAR_TOKEN')]) {
+                        sh '''
+                            sonar-scanner \
+                              -Dsonar.projectKey=2401106_client-server-app \
+                              -Dsonar.host.url=http://my-sonarqube-sonarqube.sonarqube.svc.cluster.local:9000 \
+                              -Dsonar.login=$SONAR_TOKEN
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Login to Nexus Registry') {
             steps {
                 container('dind') {
                     sh '''
-                    echo "$DOCKERHUB_CREDENTIALS_PSW" | docker login -u "$DOCKERHUB_CREDENTIALS_USR" --password-stdin
-                    docker push $IMAGE_NAME:latest
+                        docker --version
+                        sleep 10
+                        docker login nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085 -u admin -p Changeme@2025
                     '''
                 }
             }
         }
 
-        stage('Deploy to Windows Server') {
+        stage('Tag + Push Images') {
             steps {
-                sshagent(['windows-server-ssh']) {
-                    sh """
-                    ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_IP \\
-                    "docker stop $CONTAINER_NAME || true && \\
-                     docker rm $CONTAINER_NAME || true && \\
-                     docker pull $IMAGE_NAME:latest && \\
-                     docker run -d -p 3000:3000 --name $CONTAINER_NAME $IMAGE_NAME:latest"
-                    """
+                container('dind') {
+                    sh '''
+                        docker tag server:latest nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/server:latest
+                        docker tag client:latest nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/client:latest
+
+                        docker push nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/server:latest
+                        docker push nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/client:latest
+                    '''
                 }
             }
         }
-    }
 
-    post {
-        success { echo "🎉 Deployment Successful!" }
-        failure { echo "❌ Build Failed!" }
+        stage('Create Namespace + Secrets') {
+            steps {
+                container('kubectl') {
+                    withCredentials([
+                        string(credentialsId: 'mongo-uri-2401106', variable: 'MONGO_URI'),
+                        string(credentialsId: 'jwt-secret-2401106', variable: 'JWT_SECRET'),
+                        string(credentialsId: 'gmail-user-2401106', variable: 'GMAIL_USER'),
+                        string(credentialsId: 'gmail-pass-2401106', variable: 'GMAIL_PASS')
+                    ]) {
+                        sh '''
+                            # Create namespace directly (no YAML file)
+                            kubectl get namespace 2401106 || kubectl create namespace 2401106
+
+                            # Docker registry pull secret
+                            kubectl create secret docker-registry nexus-secret \
+                              --docker-server=nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085 \
+                              --docker-username=admin \
+                              --docker-password=Changeme@2025 \
+                              --namespace=2401106 || true
+
+                            # Application secrets
+                            kubectl create secret generic server-secret -n 2401106 \
+                              --from-literal=MONGO_URI="$MONGO_URI" \
+                              --from-literal=JWT_SECRET="$JWT_SECRET" \
+                              --from-literal=GMAIL_USER="$GMAIL_USER" \
+                              --from-literal=GMAIL_PASS="$GMAIL_PASS" || true
+                        '''
+                    }
+                }
+            }
+        }
+
+stage('Deploy to Kubernetes') {
+            steps {
+                container('kubectl') {
+                    // Ensure this directory exists in your repo!
+                    // If your yaml is in the root, remove the dir() block.
+                    dir('k8s-deployment') { 
+                        sh """
+                            # 1. Update Image Tag to match the Build
+                            sed -i 's|server:latest|server:${BUILD_NUMBER}|g' deployment.yaml
+                            sed -i 's|client:latest|client:${BUILD_NUMBER}|g' deployment.yaml
+                            
+                            # 2. Deploy (Fire and Forget, like the successful log)
+                            kubectl apply -f deployment.yaml
+                            
+                            # 3. Optional: Print status but don't fail the pipeline yet
+                            kubectl get pods -n 2401106
+                        """
+                    }
+                }
+            }
+        }
+
     }
 }
