@@ -3,6 +3,7 @@ kind: Namespace
 metadata:
   name: "2401194"
 ---
+# --- Backend Deployment ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,8 +41,9 @@ spec:
         env:
         - name: PORT
           value: "5000"
+        # 💡 CORRECTED: Simplified BASE_URL for internal communication within the same namespace
         - name: BASE_URL
-          value: "http://backend-service.smart-resume-builder.svc.cluster.local:5000"
+          value: "http://backend-service:5000"
         - name: MONGO_URI
           valueFrom:
             secretKeyRef:
@@ -63,6 +65,7 @@ spec:
               name: backend-secret
               key: GMAIL_PASS
 ---
+# --- Backend Service (ClusterIP) ---
 apiVersion: v1
 kind: Service
 metadata:
@@ -77,6 +80,7 @@ spec:
       targetPort: 5000
   type: ClusterIP
 ---
+# --- Frontend Deployment ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,8 +102,9 @@ spec:
       - name: frontend
         image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-frontend:latest
         ports:
-        - containerPort: 80
+        - containerPort: 80 # Frontend typically listens on port 80
 ---
+# --- Frontend Service (ClusterIP) ---
 apiVersion: v1
 kind: Service
 metadata:
@@ -110,10 +115,14 @@ spec:
     app: frontend
   ports:
     - protocol: TCP
-      port: 32000
-      targetPort: 80
-  type: NodePort
+      # Service port, which Ingress will target
+      port: 80 
+      # Port the frontend container is listening on
+      targetPort: 80 
+  # ✅ FIXED: Changed service type from NodePort to ClusterIP
+  type: ClusterIP 
 ---
+# --- Ingress ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -131,4 +140,5 @@ spec:
           service:
             name: frontend-service
             port:
-              number: 32000
+              # ✅ FIXED: Now targeting the ClusterIP Service port 80
+              number: 80
