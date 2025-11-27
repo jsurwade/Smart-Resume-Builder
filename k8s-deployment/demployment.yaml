@@ -41,7 +41,7 @@ spec:
         - name: PORT
           value: "5000"
         - name: BASE_URL
-          value: "http://backend-service.smart-resume-builder.svc.cluster.local:5000"
+          value: "http://backend-service.2401194.svc.cluster.local:5000"
         - name: MONGO_URI
           valueFrom:
             secretKeyRef:
@@ -99,6 +99,9 @@ spec:
         image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-frontend:latest
         ports:
         - containerPort: 80
+        env:
+        - name: NEXT_PUBLIC_API_URL
+          value: "http://backend-service.2401194.svc.cluster.local:5000"
 ---
 apiVersion: v1
 kind: Service
@@ -119,6 +122,8 @@ kind: Ingress
 metadata:
   name: app-ingress
   namespace: "2401194"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
 spec:
   ingressClassName: nginx
   rules:
