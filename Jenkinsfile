@@ -84,7 +84,7 @@ spec:
                     withSonarQubeEnv("${SONARQUBE_ENV}") {
                         sh """
                             sonar-scanner \
-                              -Dsonar.projectKey=Resumebuilder_Aniket_2401115 \
+                              -Dsonar.projectKey=smart-resume-builder-CICD \
                               -Dsonar.sources=src \
                               -Dsonar.host.url=http://sonarqube.imcc.com \
                               -Dsonar.token=${SONARQUBE_AUTH_TOKEN}
