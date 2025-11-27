@@ -37,15 +37,36 @@ spec:
     command: ["cat"]
     tty: true
 
+  # 💡 ADDED: Container for kubectl
+  - name: kubectl
+    image: bitnami/kubectl:latest
+    command:
+    - cat
+    tty: true
+    # Required for reading the kubeconfig file
+    env:
+    - name: KUBECONFIG
+      value: /kube/config
+    volumeMounts:
+    - name: kubeconfig-secret
+      mountPath: /kube/config
+      subPath: kubeconfig
+      
   - name: jnlp
     image: jenkins/inbound-agent:latest
     tty: true
+    
+  # 💡 ADDED: Volume definition for the kubeconfig secret
+  volumes:
+  - name: kubeconfig-secret
+    secret:
+      secretName: kubeconfig-secret # Ensure this secret exists in your Jenkins' namespace!
 """
         }
     }
 
     environment {
-        SONARQUBE_ENV        = "sonarqube-2401115"
+        SONARQUBE_ENV      = "sonarqube-2401115"
         SONARQUBE_AUTH_TOKEN = credentials('sonartoken')
 
         NEXUS_URL    = "nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085"
@@ -83,10 +104,10 @@ spec:
                 container('sonar') {
                     withSonarQubeEnv("${SONARQUBE_ENV}") {
                         sh """
-                            sonar-scanner \
-                              -Dsonar.projectKey=smart-resume-builder-CICD
-                              -Dsonar.sources=src \
-                              -Dsonar.host.url=http://sonarqube.imcc.com \
+                            sonar-scanner \\
+                              -Dsonar.projectKey=smart-resume-builder-CICD \\
+                              -Dsonar.sources=src \\
+                              -Dsonar.host.url=http://sonarqube.imcc.com \\
                               -Dsonar.token=${SONARQUBE_AUTH_TOKEN}
                         """
                     }
@@ -97,14 +118,11 @@ spec:
         stage('Build Docker Image') {
             steps {
                 container('docker') {
-
-                    // Login to Docker Hub (to avoid 429 pull rate limits)
                     withCredentials([usernamePassword(
                         credentialsId: 'dockerhub-creds',
                         usernameVariable: 'DUSER',
                         passwordVariable: 'DPASS'
                     )]) {
-
                         sh '''
                             echo "Waiting for Docker daemon..."
                             for i in {1..30}; do
@@ -118,7 +136,7 @@ spec:
 
                         script {
                             def tag = env.BUILD_NUMBER
-
+                            // Assumes your Dockerfile is in the root of the workspace
                             sh """
                                 echo "$DPASS" | docker login -u "$DUSER" --password-stdin
 
@@ -149,12 +167,35 @@ spec:
                 }
             }
         }
+        
+        // 🚀 NEW STAGE: Deployment
+        stage('Deploy Application') {
+            steps {
+                // Use the new kubectl container
+                container('kubectl') {
+                    script {
+                        // Assuming your k8s files are in a directory named 'k8s'
+                        dir('k8s') { 
+                            sh '''
+                                echo "Applying Kubernetes manifests for namespace 2401194..."
+                                # Apply all resources (use the corrected YAML from the previous response)
+                                # Ensure these file names match what is in your repository's 'k8s' directory
+                                kubectl apply -f smart-resume-k8s.yaml -n 2401194 
+                                
+                                # Wait for the frontend deployment to be ready
+                                kubectl rollout status deployment/frontend -n 2401194 --timeout=5m
+                                # Wait for the backend deployment to be ready
+                                kubectl rollout status deployment/backend -n 2401194 --timeout=5m
+                            '''
+                        }
+                    }
+                }
+            }
+        }
     }
 
     post {
-        success { echo "🚀 Build & Push Successful!" }
+        success { echo "🚀 Build & Deploy Successful!" }
         failure { echo "❌ Pipeline failed — check logs." }
     }
 }
-
-// url: 'https://github.com/jsurwade/Smart-Resume-Builder',
