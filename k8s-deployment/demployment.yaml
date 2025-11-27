@@ -1,10 +1,8 @@
-# 1. Namespace for isolation
 apiVersion: v1
 kind: Namespace
 metadata:
   name: "2401194"
 ---
-# 2. Backend Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,8 +22,7 @@ spec:
       - name: nexus-secret
       containers:
       - name: backend
-        # The image will be dynamically updated by Jenkins using 'kubectl set image'
-        image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-backend:latest 
+        image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-backend:latest
         ports:
         - containerPort: 5000
         readinessProbe:
@@ -44,7 +41,7 @@ spec:
         - name: PORT
           value: "5000"
         - name: BASE_URL
-          value: "http://backend-service.2401194.svc.cluster.local:5000" # Corrected DNS based on Namespace
+          value: "http://backend-service.smart-resume-builder.svc.cluster.local:5000"
         - name: MONGO_URI
           valueFrom:
             secretKeyRef:
@@ -66,7 +63,6 @@ spec:
               name: backend-secret
               key: GMAIL_PASS
 ---
-# 3. Backend Service (Internal)
 apiVersion: v1
 kind: Service
 metadata:
@@ -81,7 +77,6 @@ spec:
       targetPort: 5000
   type: ClusterIP
 ---
-# 4. Frontend Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -101,12 +96,10 @@ spec:
       - name: nexus-secret
       containers:
       - name: frontend
-        # The image will be dynamically updated by Jenkins using 'kubectl set image'
         image: nexus-service-for-docker-hosted-registry.nexus.svc.cluster.local:8085/my-repository/smart-resume-frontend:latest
         ports:
         - containerPort: 80
 ---
-# 5. Frontend Service (NodePort for Ingress)
 apiVersion: v1
 kind: Service
 metadata:
@@ -121,7 +114,6 @@ spec:
       targetPort: 80
   type: NodePort
 ---
-# 6. Ingress (External Access)
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
