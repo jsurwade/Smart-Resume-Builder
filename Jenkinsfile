@@ -57,7 +57,7 @@ spec:
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                    url: 'https://github.com/aniketlangote03/resumebuildervite.git',
+                    url: 'https://github.com/jsurwade/Smart-Resume-Builder.git',
                     credentialsId: 'git-token-creds'
             }
         }
